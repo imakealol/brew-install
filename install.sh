@@ -39,6 +39,18 @@ then
   abort 'Bash must not run in POSIX mode. Please unset POSIXLY_CORRECT and try again.'
 fi
 
+# Check for file that prevents Homebrew installation
+if [[ -f "/etc/homebrew/brew.no_install" ]]
+then
+  BREW_NO_INSTALL="$(cat "/etc/homebrew/brew.no_install" 2>/dev/null)"
+  if [[ -n "${BREW_NO_INSTALL}" ]]
+  then
+    abort "Homebrew cannot be installed because ${BREW_NO_INSTALL}."
+  else
+    abort "Homebrew cannot be installed because /etc/homebrew/brew.no_install exists!"
+  fi
+fi
+
 # string formatters
 if [[ -t 1 ]]
 then
@@ -257,6 +269,25 @@ execute() {
   if ! "$@"
   then
     abort "$(printf "Failed during: %s" "$(shell_join "$@")")"
+  fi
+}
+
+retry() {
+  local tries="$1" n="$1" pause=2
+  shift
+  if ! "$@"
+  then
+    while [[ $((--n)) -gt 0 ]]
+    do
+      warn "$(printf "Trying again in %d seconds: %s" "${pause}" "$(shell_join "$@")")"
+      sleep "${pause}"
+      ((pause *= 2))
+      if "$@"
+      then
+        return
+      fi
+    done
+    abort "$(printf "Failed %d times doing: %s" "${tries}" "$(shell_join "$@")")"
   fi
 }
 
@@ -532,18 +563,9 @@ then
     abort "Homebrew is only supported on Intel and ARM processors!"
   fi
 else
-  # On Linux, support only 64-bit Intel
-  if [[ "${UNAME_MACHINE}" == "aarch64" ]]
+  if [[ "${UNAME_MACHINE}" != "x86_64" ]] && [[ "${UNAME_MACHINE}" != "aarch64" ]]
   then
-    abort "$(
-      cat <<EOABORT
-Homebrew on Linux is not supported on ARM processors.
-  ${tty_underline}https://docs.brew.sh/Homebrew-on-Linux#arm-unsupported${tty_reset}
-EOABORT
-    )"
-  elif [[ "${UNAME_MACHINE}" != "x86_64" ]]
-  then
-    abort "Homebrew on Linux is only supported on Intel processors!"
+    abort "Homebrew on Linux is only supported on Intel x86_64 and ARM64 processors!"
   fi
 fi
 
@@ -939,8 +961,8 @@ ohai "Downloading and installing Homebrew..."
   else
     quiet_progress=("--quiet")
   fi
-  execute "${USABLE_GIT}" "fetch" "${quiet_progress[@]}" "--force" "origin"
-  execute "${USABLE_GIT}" "fetch" "${quiet_progress[@]}" "--force" "--tags" "origin"
+  retry 5 "${USABLE_GIT}" "fetch" "${quiet_progress[@]}" "--force" "origin"
+  retry 5 "${USABLE_GIT}" "fetch" "${quiet_progress[@]}" "--force" "--tags" "origin"
 
   execute "${USABLE_GIT}" "remote" "set-head" "origin" "--auto" >/dev/null
 
@@ -975,7 +997,7 @@ ohai "Downloading and installing Homebrew..."
       execute "${USABLE_GIT}" "config" "remote.origin.fetch" "+refs/heads/*:refs/remotes/origin/*"
       execute "${USABLE_GIT}" "config" "--bool" "core.autocrlf" "false"
       execute "${USABLE_GIT}" "config" "--bool" "core.symlinks" "true"
-      execute "${USABLE_GIT}" "fetch" "--force" "${quiet_progress[@]}" \
+      retry 5 "${USABLE_GIT}" "fetch" "--force" "${quiet_progress[@]}" \
         "origin" "refs/heads/master:refs/remotes/origin/master"
       execute "${USABLE_GIT}" "remote" "set-head" "origin" "--auto" >/dev/null
       execute "${USABLE_GIT}" "reset" "--hard" "origin/master"
